@@ -1,0 +1,427 @@
+#!/bin/zsh
+# ztab [<tab>...|--list|--create <name> [path]|--reconfigure <tab>|--help]:
+# toggle zellij layout tabs on/off in the running session — close each named
+# tab if it is open, otherwise open it in its layout position. Any number of
+# tabs can be named at once; each name resolves exactly, else
+# case-insensitively, else by unique case-insensitive prefix, and every one of
+# them is resolved before anything is toggled, so a typo in the third name does
+# not leave the first two toggled. Names repeated in one call toggle once.
+# With --list (-l), or no argument at all, lists the layout's tabs and which of
+# them are open, and flags any stray zellij session (see zstart). With
+# --create (-c), appends a new tab (one only) to the layout and opens it; its
+# cwd is the given path, else the first <dir>/<name> that exists among
+# $ZCW_PROJECT_DIRS, else $PWD. The tab is stamped out of the tab template
+# (share/tab.kdl, or $ZCW_TAB_TEMPLATE): {{name}} and {{cwd}} are substituted,
+# and the default shape is two named interactive claudes + "<Tab> Scratch" over
+# "<Tab> Shell".
+# With --reconfigure (-r), rewrites an existing tab's block from the template,
+# keeping its name, cwd and on/off state, and does nothing when the block
+# already matches the template; an open tab is closed and reopened so the new
+# shape is live — unless it is the tab this shell sits in, since closing it
+# would take the shell along, in which case only the file changes and ztab says
+# what to run from another tab.
+# --help (-h) prints usage.
+#
+# Settings come from ${XDG_CONFIG_HOME:-$HOME/.config}/zellij-claude-workspace/config
+# (see examples/config); an environment variable already set wins over it:
+#   ZCW_SESSION        the workspace session name (default main)
+#   ZCW_LAYOUT         the layout file (default ~/.config/zellij/layouts/claude.kdl)
+#   ZCW_PROJECT_DIRS   zsh array of dirs searched by --create (default none)
+#   ZCW_TAB_TEMPLATE   the tab template (default: the user config dir's tab.kdl
+#                      if present, else share/tab.kdl next to this script)
+#
+# The layout file stays the single source of truth: the named tab's block is
+# lifted out of it and passed to `new-tab --layout-string`, carried along with
+# default_tab_template — without it a layout-string tab comes up missing its
+# tab/status bars, since the session's new_tab_template only applies to a bare
+# `new-tab`.
+# The toggle persists across a fresh rebuild: toggling off also slashdashes
+# (/-) the tab's node in the layout file so zellij skips it when a session is
+# built from the layout, and toggling on removes the marker. A slashdashed tab
+# stays defined here — listed and togglable — it just doesn't open at startup.
+# --list marks a tab whose open state disagrees with the layout (e.g. closed
+# behind ztab's back) with what the next fresh start will do; one toggle
+# resyncs it.
+# Closing kills the tab's panes. The claude panes are named sessions (see
+# claude_create_or_resume) and resume where they left off when reopened —
+# Scratch included; only the shell pane's scrollback is gone. Toggling off the
+# tab you are sitting in works, and takes the shell you typed into with it — in
+# a batch it is always toggled last, so the rest of the batch has happened by
+# then.
+
+setopt extended_glob
+
+# Config, then defaults. The config file uses `: ${VAR:=value}` so that a
+# variable already in the environment wins over it. The script's own directory
+# is captured here at top level: inside a function $0 is the function's name.
+# ${0:A:h} resolves symlinks, so a symlink on PATH finds the repo's share/.
+_ztab_dir=${0:A:h}
+_ztab_cfg=${XDG_CONFIG_HOME:-$HOME/.config}/zellij-claude-workspace
+[[ -r $_ztab_cfg/config ]] && . $_ztab_cfg/config
+: ${ZCW_SESSION:=main}
+: ${ZCW_LAYOUT:=$HOME/.config/zellij/layouts/claude.kdl}
+if [[ -z $ZCW_TAB_TEMPLATE ]]; then
+  if [[ -r $_ztab_cfg/tab.kdl ]]; then
+    ZCW_TAB_TEMPLATE=$_ztab_cfg/tab.kdl
+  else
+    ZCW_TAB_TEMPLATE=${_ztab_dir:h}/share/tab.kdl
+  fi
+fi
+
+# _ztab_mark on|off <tab> <layout>: persist a tab's toggle state by removing/
+# adding a KDL slashdash (/-) on its header line. Idempotent; exits 3 when the
+# tab is not in the file.
+_ztab_mark() {
+  local mode=$1 layout=$3 tmp
+  tmp=$(mktemp "${${TMPDIR:-/tmp}%/}/ztab.XXXXXX") || return 1
+  ZTAB_NAME=$2 awk -v mode="$mode" '
+    BEGIN { name = ENVIRON["ZTAB_NAME"] }
+    !done && /^[[:space:]]*(\/-)?tab name="/ {
+      match($0, /name="[^"]*"/)
+      if (substr($0, RSTART + 6, RLENGTH - 7) == name) {
+        done = 1
+        if (mode == "off") sub(/(\/-)?tab name="/, "/-tab name=\"")
+        else sub(/\/-tab name="/, "tab name=\"")
+      }
+    }
+    { print }
+    END { exit done ? 0 : 3 }
+  ' "$layout" > "$tmp"
+  if (( $? )) || [[ ! -s $tmp ]]; then
+    rm -f "$tmp"
+    print -ru2 "ztab: could not mark $2 $mode in $layout"
+    return 1
+  fi
+  cp "$tmp" "$layout" || { rm -f "$tmp"; return 1 }   # cp, not mv: keeps the file's mode
+  rm -f "$tmp"
+}
+
+# _ztab_scan: (re)fill open_id/open_pos with the tabs open right now and set
+# active_tab to the focused one. Those three are ztab's locals, visible here
+# through zsh's dynamic scoping; a batch of toggles calls this between tabs so
+# each one sees the session as the previous one left it.
+# list-tabs, not query-tab-names: the latter reports in tab-id order, which
+# stops matching screen order as soon as anything is moved. --state appends
+# ACTIVE FULLSCREEN SYNC_PANES FLOATING_VIS, stripped back off here so that a
+# tab name containing spaces still survives the parse intact.
+_ztab_scan() {
+  open_id=() open_pos=() active_tab=
+  local id pos name active
+  while IFS=$'\t' read -r id pos name active; do
+    open_id[$name]=$id
+    open_pos[$name]=$pos
+    if [[ $active == true ]]; then
+      active_tab=$name
+    fi
+  done < <(zellij action list-tabs --state | awk 'NR > 1 {
+      line = $0
+      sub(/^[^ \t]+[ \t]+[^ \t]+[ \t]+/, "", line)              # TAB_ID, POSITION
+      active = (line ~ /[ \t]+true([ \t]+(true|false)){3}[ \t]*$/) ? "true" : "false"
+      sub(/([ \t]+(true|false)){4}[ \t]*$/, "", line)           # the state columns
+      printf "%s\t%s\t%s\t%s\n", $1, $2, line, active
+    }')
+}
+
+# _ztab_toggle <tab> <layout>: close the tab if it is open, else open it in its
+# layout position. Rescans the session first, and reads ztab's `defined` for the
+# layout's tab order.
+_ztab_toggle() {
+  local want=$1 layout=$2 t
+  _ztab_scan
+
+  if [[ -n ${open_id[$want]} ]]; then
+    # mark the layout before closing: closing the tab you sit in kills this shell
+    _ztab_mark off "$want" "$layout" || return 1
+    zellij action close-tab-by-id ${open_id[$want]} >/dev/null || return 1
+    print -r -- "ztab: closed $want"
+    return 0
+  fi
+
+  _ztab_mark on "$want" "$layout" || return 1
+
+  # keep only the wanted tab: brace-depth tracking skips every other tab block.
+  # Slashdashed tabs still count as tab blocks, so they are skipped too.
+  local snippet
+  snippet=$(awk -v want="$want" '
+    /^[[:space:]]*(\/-)?tab name="/ && !intab {
+      match($0, /name="[^"]*"/)
+      keep = (substr($0, RSTART + 6, RLENGTH - 7) == want)
+      intab = 1; depth = 0
+    }
+    {
+      if (intab) depth += gsub(/\{/, "{") - gsub(/\}/, "}")
+      if (!intab || keep) print
+      if (intab && depth <= 0) intab = 0
+    }' "$layout") || return 1
+  zellij action new-tab --layout-string "$snippet" >/dev/null || return 1
+
+  # it lands last; slide it left past the open tabs that follow it in the
+  # layout. Tabs not in the layout never count as preceding, so they stay right.
+  local -i li=${defined[(i)$want]} target=0 moves
+  for t in ${defined[1,li-1]}; do
+    [[ -n ${open_id[$t]} ]] && (( ++target ))
+  done
+  (( moves = ${#open_id} - target ))
+  zellij action go-to-tab-name "$want" >/dev/null
+  while (( moves-- > 0 )); do
+    zellij action move-tab left >/dev/null || break
+  done
+  print -r -- "ztab: opened $want"
+}
+
+# _ztab_block <name> <cwd>: print the layout block for a tab — the template
+# with {{name}} and {{cwd}} filled in; the one place the shape comes from, used
+# by --create and --reconfigure. Both values are validated to hold no quote or
+# backslash, so a plain substitution is safe.
+_ztab_block() {
+  local want=$1 cwd=$2 tpl
+  [[ -r $ZCW_TAB_TEMPLATE ]] || { print -ru2 "ztab: cannot read tab template: $ZCW_TAB_TEMPLATE"; return 1 }
+  tpl=$(<$ZCW_TAB_TEMPLATE)
+  tpl=${tpl//'{{name}}'/$want}
+  tpl=${tpl//'{{cwd}}'/$cwd}
+  print -r -- "$tpl"
+}
+
+# _ztab_checkname <name>: the name is interpolated into KDL strings and into a
+# single-quoted shell argument, so keep it to characters that need no escaping
+# in either.
+_ztab_checkname() {
+  if [[ $1 != [A-Za-z0-9]* || $1 == *[^A-Za-z0-9._\ -]* ]]; then
+    print -ru2 "ztab: '$1' must start alphanumeric and use only letters, digits, space . _ -"
+    return 1
+  fi
+}
+
+# _ztab_resolve <arg>: print the layout tab <arg> names — exact, else
+# case-insensitive, else unique case-insensitive prefix. Reads ztab's `defined`.
+_ztab_resolve() {
+  local want=$1
+  local -a hits
+  if (( ! ${defined[(I)$want]} )); then
+    hits=(${(M)defined:#(#i)$want})
+    (( $#hits )) || hits=(${(M)defined:#(#i)${want}*})
+    case $#hits in
+      1) want=$hits[1] ;;
+      0) print -ru2 "ztab: no tab '$1' in $layout (ztab --list to see them)"; return 1 ;;
+      *) print -ru2 "ztab: '$1' is ambiguous: $hits"; return 1 ;;
+    esac
+  fi
+  print -r -- "$want"
+}
+
+_ztab_usage() {
+  cat <<EOF
+usage: ztab                                             list tabs and their state
+       ztab -l|--list
+       ztab <tab>...                                    toggle: close if open, else open in layout position
+       ztab -c|--create <name> [path]                   append a tab to the layout and open it
+       ztab -r|--reconfigure <tab>                      rewrite a tab from the template; reopen it if open
+       ztab -h|--help
+
+template  "<Tab> Pitwall" + "<Tab> Main" named claudes | "<Tab> Scratch" named claude / "<Tab> Shell"
+          $ZCW_TAB_TEMPLATE  (ZCW_TAB_TEMPLATE overrides)
+tabs      names resolve exactly, else case-insensitively, else by unique prefix
+layout    $ZCW_LAYOUT  (ZCW_LAYOUT overrides)
+session   $ZCW_SESSION  (ZCW_SESSION overrides)
+dirs      ${ZCW_PROJECT_DIRS:-(none)}  (ZCW_PROJECT_DIRS: where --create looks for <name>)
+EOF
+}
+
+ztab() {
+  setopt extended_glob
+  local layout=$ZCW_LAYOUT
+  [[ $1 == (-h|--help) ]] && { _ztab_usage; return 0 }
+  [[ -n "$ZELLIJ" ]] || { print -ru2 "ztab: not inside a zellij session"; return 1 }
+  [[ -r "$layout" ]] || { print -ru2 "ztab: cannot read layout: $layout"; return 1 }
+
+  # tab names the layout defines, in file order, with their persistent state:
+  # a slashdashed (/-) tab is defined but off at the next fresh start
+  local -a defined
+  local -A infile
+  local state name
+  while IFS=$'\t' read -r state name; do
+    [[ -n $name ]] || continue
+    defined+=($name)
+    infile[$name]=$state
+  done < <(awk '/^[[:space:]]*(\/-)?tab name="/ {
+      match($0, /name="[^"]*"/)
+      printf "%s\t%s\n", ($0 ~ /^[[:space:]]*\/-/) ? "off" : "on", substr($0, RSTART + 6, RLENGTH - 7)
+    }' "$layout")
+  (( $#defined )) || { print -ru2 "ztab: no tabs defined in $layout"; return 1 }
+
+  # name -> stable id / screen position for the tabs open right now, plus the
+  # name of the focused one
+  local -A open_id open_pos
+  local active_tab
+  _ztab_scan
+
+  local t
+  if (( $# == 0 )) || [[ $1 == (-l|--list) ]]; then
+    for t in $defined; do
+      state=${${open_id[$t]:+on}:-off}
+      if [[ $state == $infile[$t] ]]; then
+        printf '  %-3s %s\n' "$state" "$t"
+      else
+        printf '  %-3s %s  (%s at next start)\n' "$state" "$t" "$infile[$t]"
+      fi
+    done
+    for t in ${(ko)open_id}; do
+      (( ${defined[(I)$t]} )) || printf '  %-3s %s  (not in layout)\n' on "$t"
+    done
+    local -a strays
+    strays=(${(f)"$(zellij list-sessions --no-formatting 2>/dev/null | awk -v s="$ZCW_SESSION" '$1 != s {print $1}')"})
+    (( $#strays )) && printf '  %d stray zellij session(s): %s  (zstop --strays removes them)\n' $#strays "${(j:, :)strays}"
+    return 0
+  fi
+
+  if [[ $1 == (-c|--create) ]]; then
+    shift
+    local want=$1
+    [[ -n $want ]] || { print -ru2 "ztab: usage: ztab --create <name> [path]"; return 1 }
+    (( $# <= 2 )) || { print -ru2 "ztab: usage: ztab --create <name> [path] (quote paths with spaces)"; return 1 }
+    _ztab_checkname "$want" || return 1
+    local -a dupe
+    dupe=(${(M)defined:#(#i)$want})
+    (( $#dupe )) && {
+      print -ru2 "ztab: '$dupe[1]' is already in the layout (ztab $dupe[1] toggles it)"
+      return 1
+    }
+
+    local cwd
+    if (( $# > 1 )); then
+      cwd=${~2}          # ~ flag: expand a quoted "~/..." the shell left alone
+      cwd=${cwd:a}       # :a not :A — absolute, but keep symlinks as written
+      [[ -d $cwd ]] || { print -ru2 "ztab: not a directory: $2"; return 1 }
+    else
+      local dir
+      cwd=''
+      for dir in $ZCW_PROJECT_DIRS; do
+        dir=${~dir}      # ~ flag: expand a "~/..." written quoted in the config
+        [[ -d ${dir%/}/$want ]] && { cwd=${dir%/}/$want; break }
+      done
+      [[ -n $cwd ]] || cwd=$PWD
+    fi
+    [[ $cwd == *'"'* || $cwd == *'\'* ]] && {
+      print -ru2 "ztab: path has a quote or backslash, which KDL would mangle: $cwd"
+      return 1
+    }
+
+    # a blank line separates the new block from the tab above it
+    local block
+    block=$(_ztab_block "$want" "$cwd") || return 1
+    block=$'\n'$block
+    # insert before the layout's own closing brace, i.e. after the last tab.
+    # ENVIRON, not -v: awk expands escape sequences in a -v value.
+    local tmp
+    tmp=$(mktemp "${${TMPDIR:-/tmp}%/}/ztab.XXXXXX") || return 1
+    ZTAB_BLOCK=$block awk '
+      BEGIN { block = ENVIRON["ZTAB_BLOCK"] }
+      { line[NR] = $0; if ($0 ~ /^\}[[:space:]]*$/) last = NR }
+      END {
+        if (!last) exit 2
+        for (i = 1; i <= NR; i++) {
+          if (i == last) printf "%s\n", block
+          print line[i]
+        }
+      }' "$layout" > "$tmp"
+    if (( $? )) || [[ ! -s $tmp ]]; then
+      rm -f "$tmp"
+      print -ru2 "ztab: no closing brace to append before in $layout"
+      return 1
+    fi
+    cp "$tmp" "$layout" || { rm -f "$tmp"; return 1 }   # cp, not mv: keeps the file's mode
+    rm -f "$tmp"
+    print -r -- "ztab: added $want ($cwd) to $layout"
+
+    [[ -z ${open_id[$want]} ]] || { print -r -- "ztab: a tab named $want is already open"; return 0 }
+    ztab "$want"
+    return
+  fi
+
+  if [[ $1 == (-r|--reconfigure) ]]; then
+    shift
+    (( $# == 1 )) || { print -ru2 "ztab: usage: ztab --reconfigure <tab>"; return 1 }
+    local want
+    want=$(_ztab_resolve "$1") || return 1
+    _ztab_checkname "$want" || return 1
+
+    # the tab's current block, for its cwd and to compare against the template
+    local old
+    old=$(ZTAB_NAME=$want awk '
+      BEGIN { name = ENVIRON["ZTAB_NAME"] }
+      !intab && /^[[:space:]]*(\/-)?tab name="/ {
+        match($0, /name="[^"]*"/)
+        if (substr($0, RSTART + 6, RLENGTH - 7) == name) { intab = 1; depth = 0 }
+      }
+      intab {
+        print
+        depth += gsub(/\{/, "{") - gsub(/\}/, "}")
+        if (depth <= 0) exit
+      }' "$layout")
+    [[ $old == *cwd=\"* ]] || { print -ru2 "ztab: no cwd on the $want tab in $layout"; return 1 }
+    local cwd=${${old#*cwd=\"}%%\"*}
+
+    local block
+    block=$(_ztab_block "$want" "$cwd") || return 1
+    # already current? compare ignoring the on/off marker (the first "/-")
+    [[ ${old/\/-tab name=/tab name=} != $block ]] || { print -r -- "ztab: $want already matches the template"; return 0 }
+    # keep the on/off marker: the header is the first "tab name=" in the block
+    [[ $infile[$want] == off ]] && block=${block/tab name=/\/-tab name=}
+
+    local tmp
+    tmp=$(mktemp "${${TMPDIR:-/tmp}%/}/ztab.XXXXXX") || return 1
+    ZTAB_NAME=$want ZTAB_BLOCK=$block awk '
+      BEGIN { name = ENVIRON["ZTAB_NAME"]; block = ENVIRON["ZTAB_BLOCK"] }
+      !intab && /^[[:space:]]*(\/-)?tab name="/ {
+        match($0, /name="[^"]*"/)
+        if (substr($0, RSTART + 6, RLENGTH - 7) == name) {
+          intab = 1; depth = 0; done = 1
+          printf "%s\n", block
+        }
+      }
+      intab {
+        depth += gsub(/\{/, "{") - gsub(/\}/, "}")
+        if (depth <= 0) intab = 0
+        next
+      }
+      { print }
+      END { exit done ? 0 : 3 }' "$layout" > "$tmp"
+    if (( $? )) || [[ ! -s $tmp ]]; then
+      rm -f "$tmp"
+      print -ru2 "ztab: could not rewrite $want in $layout"
+      return 1
+    fi
+    cp "$tmp" "$layout" || { rm -f "$tmp"; return 1 }   # cp, not mv: keeps the file's mode
+    rm -f "$tmp"
+    print -r -- "ztab: rewrote $want from the template in $layout"
+
+    [[ -n ${open_id[$want]} ]] || return 0
+    if [[ $active_tab == $want ]]; then
+      print -r -- "ztab: $want is the tab this shell is in, so it was not reopened; from another tab run: ztab $want; ztab $want"
+      return 0
+    fi
+    _ztab_toggle "$want" "$layout" && _ztab_toggle "$want" "$layout"
+    return
+  fi
+
+  # resolve every argument before toggling any of them
+  local -a wants
+  local arg want
+  for arg in "$@"; do
+    want=$(_ztab_resolve "$arg") || return 1
+    wants+=($want)
+  done
+  wants=(${(u)wants})   # (u): two arguments naming one tab would toggle it twice
+
+  # closing the tab this shell sits in takes the shell with it, so save it for
+  # last — by then the rest of the batch is done
+  local -i ai=0
+  [[ -n $active_tab ]] && ai=${wants[(I)$active_tab]}
+  (( ai )) && wants=(${wants[1,ai-1]} ${wants[ai+1,-1]} $active_tab)
+
+  for want in $wants; do
+    _ztab_toggle "$want" "$layout" || return 1
+  done
+}
+
+ztab "$@"

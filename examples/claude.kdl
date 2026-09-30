@@ -1,0 +1,74 @@
+// Claude workspace layout — source of truth for session startup.
+// One tab per project; each tab: three vertical columns.
+//
+// Every tab is stamped from the tab template (share/tab.kdl) — two interactive
+// sessions plus a scratch column:
+//   left:   pane "<Tab> Pitwall"   — claude_create_or_resume "<Tab> Pitwall":
+//           resumes that named session, or creates it (labeled) on first use
+//   middle: pane "<Tab> Main" — same, for "<Tab> Main"
+//   right:  horizontal split — pane "<Tab> Scratch" on top:
+//           claude_create_or_resume "<Tab> Scratch", a resumable third
+//           session (/clear it for a clean slate); pane "<Tab> Shell" for
+//           git/builds below. Written out per tab, not as a pane_template: a
+//           template cannot carry the tab's name, and every pane here is
+//           "<Tab> <Role>".
+// claude_create_or_resume (on PATH) resumes the newest transcript
+// in this cwd titled <name> — the name survives /clear, the session id does
+// not — and on a miss creates a fresh named session under a stable uuid5, so
+// it never hangs in the interactive picker. Panes run `zsh -lc`: `-l` sources
+// ~/.zprofile, which must put claude and these scripts on PATH; no `-i`, so
+// nothing depends on ~/.zshrc — the commands are scripts there, not shell
+// functions. Used as default_layout in config.kdl.
+// NOTE: start the workspace with `zstart`, never bare `zellij`: the workspace
+// is a single session (`main` unless ZCW_SESSION says otherwise). The server
+// keeps running after the terminal quits (on_force_close=detach), so zstart
+// normally just reattaches; when the session is dead, zstart creates it from
+// this file. Session serialization is off in config.kdl, so there is no
+// snapshot to resurrect and a layout edit takes effect on the next start from
+// dead: to apply one, run `zstop`, which kills every session; the terminal
+// stays open, run zstart to rebuild. Any other zellij session is a stray (a
+// bare `zellij` rebuilds this whole layout, resuming every named session a
+// second time) — zstart runs `zstop --strays` on launch to kill them,
+// `zstop --strays` also does it by hand from inside the workspace session, and
+// `ztab --list` reports them.
+// To capture a live session's arrangement back into this file:
+//   zellij action dump-layout
+// `ztab <tab>` toggles any tab below on/off in the running session, reading
+// its block straight out of this file — so a tab added here is togglable
+// without restarting. `ztab --create <name> [path]` appends a tab from the
+// template and opens it.
+// The toggle also persists here: ztab slashdashes (`/-`) a tab node when
+// toggling it off and removes the marker when toggling it on, so a fresh
+// rebuild from this layout opens only the tabs that were left on. A
+// slashdashed tab is still defined — `ztab --list` shows it and `ztab <tab>`
+// brings it back.
+layout {
+    // One row of chrome: compact-bar carries the tabs and the current input
+    // mode (LOCKED / NORMAL / PANE / TAB ...) — no bottom status bar, no key
+    // hints; the mode name is the only cue for which layer you are in.
+    default_tab_template {
+        pane size=1 borderless=true {
+            plugin location="zellij:compact-bar"
+        }
+        children
+    }
+
+    // Placeholder: edit the cwd to a real project directory, or delete this
+    // tab and add your own with `ztab --create <name> [path]`.
+    tab name="Home" cwd="/path/to/project" {
+        pane split_direction="vertical" {
+            pane name="Home Pitwall" focus=true command="/bin/zsh" {
+                args "-lc" "claude_create_or_resume 'Home Pitwall'"
+            }
+            pane name="Home Main" command="/bin/zsh" {
+                args "-lc" "claude_create_or_resume 'Home Main'"
+            }
+            pane split_direction="horizontal" {
+                pane name="Home Scratch" command="/bin/zsh" {
+                    args "-lc" "claude_create_or_resume 'Home Scratch'"
+                }
+                pane name="Home Shell"
+            }
+        }
+    }
+}

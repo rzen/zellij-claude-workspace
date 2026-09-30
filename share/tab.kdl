@@ -1,0 +1,16 @@
+    tab name="{{name}}" cwd="{{cwd}}" {
+        pane split_direction="vertical" {
+            pane name="{{name}} Pitwall" focus=true command="/bin/zsh" {
+                args "-lc" "claude_create_or_resume '{{name}} Pitwall'"
+            }
+            pane name="{{name}} Main" command="/bin/zsh" {
+                args "-lc" "claude_create_or_resume '{{name}} Main'"
+            }
+            pane split_direction="horizontal" {
+                pane name="{{name}} Scratch" command="/bin/zsh" {
+                    args "-lc" "claude_create_or_resume '{{name}} Scratch'"
+                }
+                pane name="{{name}} Shell"
+            }
+        }
+    }

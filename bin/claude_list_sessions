@@ -1,0 +1,40 @@
+#!/bin/zsh
+# claude_list_sessions [-a]: list Claude sessions for this directory (or all
+# dirs with -a), newest first, deduped by session id. Reads the registry in
+# ~/.claude/sessions (an undocumented internal format that may change). A "user" name is a resume handle (claude_create_or_resume
+# <name> / --resume <name>); "derived" names are auto-generated and are not.
+
+local all=0
+[[ "$1" == "-a" || "$1" == "--all" ]] && all=1
+python3 - "$PWD" "$all" <<'PY'
+import glob, json, os, sys, time
+here, show_all = sys.argv[1], sys.argv[2] == "1"
+rows = {}  # sessionId -> newest record
+for f in glob.glob(os.path.expanduser("~/.claude/sessions/*.json")):
+    try: d = json.load(open(f))
+    except Exception: continue
+    if not show_all and d.get("cwd") != here: continue
+    sid = d.get("sessionId")
+    if not sid: continue
+    if sid not in rows or d.get("updatedAt", 0) > rows[sid].get("updatedAt", 0):
+        rows[sid] = d
+def ago(ms):
+    if not ms: return "?"
+    s = max(0, time.time() - ms / 1000)
+    for n, u in ((86400, "d"), (3600, "h"), (60, "m")):
+        if s >= n: return f"{int(s // n)}{u} ago"
+    return "just now"
+recs = sorted(rows.values(), key=lambda d: d.get("updatedAt", 0), reverse=True)
+if not recs:
+    print("no sessions" + ("" if show_all else " for this directory (try: claude_list_sessions -a)")); sys.exit(0)
+nw = max([4] + [len(str(d.get("name"))) for d in recs])
+hdr = f"{'NAME':<{nw}}  {'WHO':<7}  {'STATUS':<6}  {'UPDATED':<9}  ID"
+if show_all: hdr += "        CWD"
+print(hdr)
+for d in recs:
+    who = "user" if d.get("nameSource") not in (None, "derived") else "derived"
+    line = (f"{str(d.get('name')):<{nw}}  {who:<7}  {str(d.get('status','?')):<6}  "
+            f"{ago(d.get('updatedAt')):<9}  {str(d.get('sessionId',''))[:8]}")
+    if show_all: line += f"  {d.get('cwd','')}"
+    print(line)
+PY

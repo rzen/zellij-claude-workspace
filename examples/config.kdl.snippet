@@ -1,0 +1,19 @@
+// Settings for ~/.config/zellij/config.kdl (zellij >= 0.45).
+
+// Load the workspace layout (layouts/claude.kdl in the zellij config dir) by
+// default, so `zellij attach --create <session>` builds it.
+default_layout "claude"
+
+// No exited-session snapshots: a dead session is gone, and the next `zstart`
+// rebuilds it from the layout file, which stays the single source of truth.
+// (Requires server restart.)
+session_serialization false
+
+// Closing the terminal (SIGHUP and friends) detaches instead of quitting, so
+// the server and every claude in it keep running; zstart reattaches. This is
+// zellij's default — set explicitly so it cannot silently change.
+// (Requires restart.)
+on_force_close "detach"
+
+// Optional, personal preference — not required by the scripts:
+// default_mode "locked"

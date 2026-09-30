@@ -1,0 +1,71 @@
+#!/bin/zsh
+# zstop [-s|--strays]: tear down the whole zellij workspace in one command.
+# Kills every live zellij session — strays first, the one this shell is in
+# last, because that kill takes this shell along — and deletes every
+# snapshot. The terminal stays open; run zstart to rebuild the workspace from
+# the layout. Every claude in the workspace ends: named panes come back on the
+# next zstart; a turn in flight at the kill is lost, so let panes go idle
+# first.
+# Nothing after the kill can run in this shell, so the tail — delete this
+# session's snapshot — is handed to a disowned helper; zstart sweeps any
+# snapshot that slips through anyway.
+# -s|--strays does a narrower sweep instead of a teardown: kill and delete
+# every session except $ZCW_SESSION (default `main`) and the one this shell is
+# in, then return, touching neither. This is the clean-up zstart runs before it
+# attaches; run it by hand from inside the workspace session to clear strays
+# without rebuilding anything. From inside another session it spares that
+# session (killing it would take this shell along) and says so.
+#
+# Settings come from ${XDG_CONFIG_HOME:-$HOME/.config}/zellij-claude-workspace/config
+# (see examples/config); an environment variable already set wins over it.
+
+[[ -r ${XDG_CONFIG_HOME:-$HOME/.config}/zellij-claude-workspace/config ]] &&
+  . ${XDG_CONFIG_HOME:-$HOME/.config}/zellij-claude-workspace/config
+: ${ZCW_SESSION:=main}
+
+local mode=teardown
+case $1 in
+  "") ;;
+  -s|--strays) mode=strays ;;
+  *) print -ru2 "usage: zstop [-s|--strays]"; exit 2 ;;
+esac
+(( $# <= 1 )) || { print -ru2 "usage: zstop [-s|--strays]"; exit 2 }
+
+local line name here=$ZELLIJ_SESSION_NAME
+
+if [[ $mode == strays ]]; then
+  zellij list-sessions --no-formatting 2>/dev/null | while read -r line; do
+    name=${line%% *}
+    [[ -n $name && $name != $ZCW_SESSION ]] || continue
+    if [[ $name == $here ]]; then
+      print -ru2 "zstop: not killing $here, this shell is inside it; run zstop --strays from $ZCW_SESSION"
+      continue
+    fi
+    if [[ $line != *EXITED* ]]; then
+      zellij kill-session "$name" >/dev/null 2>&1
+      print -r -- "zstop: killed stray session $name"
+    fi
+    zellij delete-session "$name" >/dev/null 2>&1 && print -r -- "zstop: deleted stray session $name"
+  done
+  exit 0
+fi
+
+zellij list-sessions --no-formatting 2>/dev/null | while read -r line; do
+  name=${line%% *}
+  [[ -n $name && $name != $here ]] || continue
+  if [[ $line != *EXITED* ]]; then
+    zellij kill-session "$name" >/dev/null 2>&1 && print -r -- "zstop: killed $name"
+  fi
+  zellij delete-session "$name" >/dev/null 2>&1 && print -r -- "zstop: deleted $name"
+done
+
+local tail=""
+[[ -n $here ]] && tail="sleep 2; zellij delete-session '$here';"
+
+if [[ -n $here ]]; then
+  print -r -- "zstop: killing $here (this shell goes with it)"
+else
+  exit 0
+fi
+nohup /bin/zsh -c "$tail" >/dev/null 2>&1 &!
+zellij kill-session "$here"

@@ -1,0 +1,20 @@
+# zellij-claude-workspace config — sourced by zsh (plain assignments) from
+# ${XDG_CONFIG_HOME:-$HOME/.config}/zellij-claude-workspace/config by ztab,
+# zstart and zstop. Uncomment and edit what you want to change; the values
+# shown are the defaults. The `: ${VAR:=value}` form keeps an environment
+# variable that is already set in charge (env > this file > default).
+
+# The one zellij session that holds the workspace.
+# : ${ZCW_SESSION:=main}
+
+# The layout file ztab edits and zellij loads (default_layout "claude").
+# : ${ZCW_LAYOUT:=$HOME/.config/zellij/layouts/claude.kdl}
+
+# Where `ztab --create <name>` looks for an existing project directory: the
+# first <dir>/<name> that exists, else $PWD. A zsh array, so a plain
+# assignment (an array cannot come from the environment anyway).
+# ZCW_PROJECT_DIRS=(~/code ~/work)
+
+# The tab template, with {{name}} and {{cwd}} placeholders. Default: a tab.kdl
+# next to this file if you make one, else share/tab.kdl in the repo.
+# : ${ZCW_TAB_TEMPLATE:=${XDG_CONFIG_HOME:-$HOME/.config}/zellij-claude-workspace/tab.kdl}

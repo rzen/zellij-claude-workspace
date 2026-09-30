@@ -1,0 +1,30 @@
+#!/bin/zsh
+# zstart: the claude workspace is the single zellij session $ZCW_SESSION
+# (default `main`). zstart attaches to it when it is live and creates it from
+# the layout (default_layout in config.kdl) when it is not. session_serialization
+# is off in config.kdl, so a dead session leaves no snapshot to resurrect: it
+# always rebuilds from the current layout file, and a layout edit takes effect
+# on the next zstart with no kill/delete dance. Every other zellij session is a
+# stray — a bare `zellij` spawns a random-named server that rebuilds the
+# whole layout and resumes every named claude session a second time — so
+# zstart runs the sweep first (`zstop --strays`, on PATH) to kill
+# and delete them.
+#
+# Settings come from ${XDG_CONFIG_HOME:-$HOME/.config}/zellij-claude-workspace/config
+# (see examples/config); an environment variable already set wins over it.
+
+[[ -r ${XDG_CONFIG_HOME:-$HOME/.config}/zellij-claude-workspace/config ]] &&
+  . ${XDG_CONFIG_HOME:-$HOME/.config}/zellij-claude-workspace/config
+: ${ZCW_SESSION:=main}
+
+(( $# == 0 )) || { print -ru2 "usage: zstart"; exit 2 }
+
+"${0:A:h}/zstop" --strays
+
+[[ -n $ZELLIJ ]] && { print -ru2 "zstart: already inside zellij session $ZELLIJ_SESSION_NAME"; exit 1 }
+# a snapshot from before serialization was turned off would resurrect
+# instead of rebuilding from the layout; drop it
+if zellij list-sessions --no-formatting 2>/dev/null | awk -v s="$ZCW_SESSION" '$1 == s && /EXITED/ {f=1} END {exit !f}'; then
+  zellij delete-session "$ZCW_SESSION" >/dev/null 2>&1
+fi
+exec zellij attach --create "$ZCW_SESSION"

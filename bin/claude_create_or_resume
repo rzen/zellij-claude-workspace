@@ -1,0 +1,70 @@
+#!/bin/zsh
+# claude_create_or_resume <name> [claude args...]: resume the Claude session
+# named <name> in this directory, or create it with that name on first use.
+# The name is the durable handle, not a session id: /clear rotates a session
+# to a fresh random id (and a new transcript) but carries the name along as a
+# custom-title record, so the lookup scans this directory's transcripts in
+# ~/.claude/projects/<cwd-slug>/ for that title and resumes the one with the
+# most recent user/assistant activity (file mtime is useless — merely
+# resuming a stale transcript touches it). --name on the resume re-asserts the
+# title. A miss creates under a stable uuid5(cwd+name) with --name, so nothing
+# ever drops into the picker.
+# NOTE: this reads Claude Code's on-disk transcripts (~/.claude/projects/<slug>/
+# *.jsonl, `custom-title` records) — an undocumented internal format that may
+# change between Claude Code releases. If the lookup stops finding sessions,
+# that is the first place to look.
+# One process per session: if a claude already holds the resolved id (a stray
+# zellij server rebuilding the layout, a tab opened twice) it waits briefly and
+# then refuses, rather than letting two processes append to one transcript. That
+# wait-then-refuse policy is lib/gate.sh's.
+
+. "${0:A:h}/lib/gate.sh"
+
+local name="$1"
+[[ -z "$name" ]] && { echo "usage: claude_create_or_resume <name> [claude args...]" >&2; exit 1; }
+shift
+
+local found id
+found=$(python3 - "$PWD" "$name" <<'PY'
+import glob, json, os, re, sys, uuid
+cwd, name = sys.argv[1], sys.argv[2]
+slug = re.sub(r"[^A-Za-z0-9]", "-", cwd)
+titles = {name}
+best, best_ts = None, ""
+for f in glob.glob(os.path.expanduser(f"~/.claude/projects/{slug}/*.jsonl")):
+    titled, last = False, ""
+    try:
+        with open(f, encoding="utf-8", errors="replace") as fh:
+            for line in fh:
+                if '"type":"custom-title"' in line:
+                    try: t = json.loads(line).get("customTitle")
+                    except ValueError: continue
+                    titled = titled or t in titles
+                elif '"type":"user"' in line or '"type":"assistant"' in line:
+                    m = re.search(r'"timestamp":"([^"]+)"', line)
+                    if m and m.group(1) > last: last = m.group(1)
+    except OSError:
+        continue
+    if titled and (best is None or last > best_ts):  # titled but idle still beats creating anew
+        best, best_ts = os.path.basename(f)[:-6], last
+if best:
+    print("resume", best)
+else:
+    print("create", uuid.uuid5(uuid.NAMESPACE_URL, cwd + "\0" + name))
+PY
+) || exit 1
+id=${found#* }
+
+# A holder that is on its way out — the pane ztab just closed, whose claude
+# is still shutting down as the replacement tab opens — lets go within a
+# second or two; a real duplicate does not. gate_wait polls for ~5s and then
+# refuses. Deliberately pgrep and not a lock: the holder may be a
+# `claude --resume <id>` launched by hand, which would never have taken one.
+_holder() { pgrep -f -- "claude (--resume|--session-id) $id( |$)" 2>/dev/null | head -1; }
+gate_wait "claude_create_or_resume '$name'" 5 _holder || exit 1
+
+if [[ $found == resume* ]]; then
+  exec claude --resume "$id" --name "$name" "$@"        # newest transcript titled <name>
+else
+  exec claude --session-id "$id" --name "$name" "$@"    # first use -> create, labeled
+fi

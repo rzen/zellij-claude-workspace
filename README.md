@@ -29,7 +29,7 @@ the running session and remembers the state in the file.
 
 ## Requirements
 
-- zellij 0.45 or newer (`list-tabs --state`, `close-tab-by-id`, `move-tab`, `mouse_scroll_resize`)
+- zellij 0.45 or newer (`list-tabs --state`, `close-tab-by-id`, `move-tab`)
 - Claude Code (`claude` on PATH)
 - python3, zsh; macOS or Linux
 
@@ -56,7 +56,7 @@ on_force_close "detach"
 - `on_force_close "detach"` (zellij's default): closing the terminal detaches instead of quitting, so the server and every claude in it keep running.
 - `default_layout "claude"`: the layout name, matching `claude.kdl`.
 
-Then edit the `Home` tab's `cwd` in the layout (or delete it and use `ztab --create`).
+The installed layout has one `Home` tab rooted at `$HOME`; add projects with `ztab --create <name> [path]`.
 
 Panes run `zsh -lc`, so `claude` and these scripts must be on PATH from a login shell (`~/.zprofile`), not just `~/.zshrc`.
 

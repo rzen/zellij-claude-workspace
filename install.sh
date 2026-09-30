@@ -1,6 +1,6 @@
 #!/bin/sh
 # install.sh [--prefix DIR] [--uninstall]: install zellij-claude-workspace.
-# Symlinks bin/* (and bin/lib) into DIR (default $HOME/.local/bin) — symlinks
+# Symlinks the bin/ commands into DIR (default $HOME/.local/bin) — symlinks
 # work because the scripts resolve their real directory (${0:A:h}) to find
 # lib/ and share/. Copies examples/claude.kdl to the layout path and
 # examples/config to the config dir, each only when absent, and never edits
@@ -42,6 +42,7 @@ fi
 
 mkdir -p "$prefix"
 for src in "$here"/bin/*; do
+  [ -f "$src" ] || continue   # lib/ stays put: the scripts find it via their real path
   dst="$prefix/$(basename "$src")"
   if [ -e "$dst" ] && [ ! -L "$dst" ]; then
     echo "skipped $dst (exists and is not a symlink)" >&2
@@ -55,8 +56,9 @@ if [ -e "$layout" ]; then
   echo "kept existing layout $layout"
 else
   mkdir -p "$(dirname "$layout")"
-  cp "$here/examples/claude.kdl" "$layout"
-  echo "installed example layout $layout (edit the cwd of the Home tab)"
+  # the Home tab starts in $HOME; KDL strings can't hold a quote or backslash
+  sed "s|cwd=\"/path/to/project\"|cwd=\"$HOME\"|" "$here/examples/claude.kdl" > "$layout"
+  echo "installed example layout $layout (one Home tab; add projects with ztab --create)"
 fi
 
 if [ -e "$cfgdir/config" ]; then

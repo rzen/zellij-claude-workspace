@@ -25,6 +25,7 @@ the running session and remembers the state in the file.
 - `ztab --create` appends a new tab from a template and opens it; `--reconfigure` rewrites a tab from the template.
 - `zstop` tears everything down; `zstop --strays` (run by `zstart`) removes stray zellij sessions.
 - `claude_list_sessions` lists Claude sessions for a directory (or all).
+- Interactive installer: asks for the key locations, shows a plan, installs on a yes.
 - Customizable: config file for session name, layout path, project directories, and a tab template.
 
 ## Requirements
@@ -36,14 +37,21 @@ the running session and remembers the state in the file.
 ## Install
 
 ```sh
-./install.sh [--prefix DIR]     # default ~/.local/bin
+./install.sh                    # asks for locations, shows a plan, asks "Proceed?"
+./install.sh --yes [--prefix DIR]   # no questions: defaults (and --prefix)
 ./install.sh --uninstall        # removes only symlinks pointing into this repo
 ```
 
-This symlinks `bin/*` into the prefix, copies `examples/claude.kdl` to
-`~/.config/zellij/layouts/claude.kdl` and `examples/config` to
-`~/.config/zellij-claude-workspace/config` (both only if absent), and warns
-about missing dependencies. It never edits your zellij `config.kdl`; add the
+The installer asks for three things, each with a default you can accept with
+Enter: the bin directory for the commands (`~/.local/bin`), the layout file
+(`~/.config/zellij/layouts/claude.kdl`), and the project folders
+`ztab --create` should search (none). It then shows the plan and installs only
+on a yes. It symlinks the commands into the bin directory, creates the layout
+(one `Home` tab) and `~/.config/zellij-claude-workspace/config` with your
+choices, each only if absent, and warns about missing dependencies. Run
+without a terminal (piped, CI) it behaves like `--yes`.
+
+It never edits your zellij `config.kdl`; add the
 settings from `examples/config.kdl.snippet`:
 
 ```kdl

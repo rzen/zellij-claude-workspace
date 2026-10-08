@@ -1,0 +1,64 @@
+macos-option-as-alt = true
+font-size = 17
+
+# Open new windows fullscreen. macos-non-native-fullscreen controls how:
+#   false        = native macOS fullscreen (own Space, animated, menu bar hidden)
+#   true         = non-native (instant, stays in the current Space, menu hidden)
+#   visible-menu = non-native, menu bar stays visible
+#   padded-notch = non-native, content padded below the notch
+fullscreen = true
+macos-non-native-fullscreen = false
+
+# Ghostty defaults discrete (mouse wheel) scrolling to 3x, which feels much
+# faster than the rest of macOS; 1x matches system behavior.
+mouse-scroll-multiplier = discrete:1
+
+# The first window runs zstart (initial-command below); later windows and tabs
+# are plain login shells outside zellij. Start the workspace by hand with
+# `zstart`, never bare `zellij` (see ~/bin/zstart).
+
+# Cmd+Opt+arrows -> Zellij pane navigation. Sends the Ctrl+Alt+arrow escape
+# sequences Zellij binds to MoveFocus (Alt+arrows stay unbound in Zellij so
+# plain Opt+arrows keep the default word-jump behavior). Overrides Ghostty's
+# own goto_split defaults on these keys (native splits unused; Zellij panes).
+keybind = super+alt+arrow_up=esc:[1;7A
+keybind = super+alt+arrow_down=esc:[1;7B
+keybind = super+alt+arrow_right=esc:[1;7C
+keybind = super+alt+arrow_left=esc:[1;7D
+
+# Cmd+Left/Right -> Zellij tab navigation: sends Alt+, / Alt+. which Zellij
+# binds to GoToPreviousTab / GoToNextTab. Overrides Ghostty's line start/end
+# defaults; Home/End cover that at the shell (bindkey in ~/.zshrc).
+keybind = super+arrow_left=esc:,
+keybind = super+arrow_right=esc:.
+
+# Opt+arrows -> word jump, as CSI Alt+arrow encodings instead of Ghostty's
+# Terminal.app-style esc:f/esc:b defaults: ESC f is indistinguishable from
+# Alt+f, which Zellij binds (ToggleFloatingPanes) and would swallow. Zellij
+# leaves Alt+arrows unbound so these pass through to the pane; zsh maps them
+# to forward-word/backward-word (bindkey in ~/.zshrc).
+keybind = alt+arrow_right=esc:[1;3C
+keybind = alt+arrow_left=esc:[1;3D
+
+# Cmd+d / Cmd+Shift+d -> Zellij pane splits: sends Alt+r / Alt+j which Zellij
+# binds to NewPane right (vertical split) / NewPane down (horizontal split).
+# Alt+d would shadow zsh kill-word, hence r/j (j = down, vim-style). Overrides
+# Ghostty's own new_split defaults (native splits unused; Zellij panes).
+keybind = super+d=esc:r
+keybind = super+shift+d=esc:j
+
+# First window only: zstart (~/bin) attaches main when it is alive
+# and builds it from the layout when it is not. `-l` sources ~/.zprofile, which
+# puts Homebrew (zellij, claude) and ~/bin on PATH; no `-i`, so
+# nothing here depends on ~/.zshrc. `zstart` execs the zellij client and returns
+# on detach or when main dies (zstop); the `exec /bin/zsh -l` then leaves a
+# normal interactive login shell in this window instead of closing it. Later
+# windows/tabs get the default shell, outside zellij.
+initial-command = /bin/zsh -lc 'zstart; exec /bin/zsh -l'
+
+# Quit when the last window closes, so `exit` in the last window (or closing
+# it) ends the app instead of leaving a windowless Ghostty resident. Otherwise
+# the next Dock click opens a second surface in the same process, and
+# initial-command — first surface only — never runs again. Quitting still only
+# detaches main; every claude in it keeps running.
+quit-after-last-window-closed = true

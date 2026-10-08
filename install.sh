@@ -1,13 +1,17 @@
 #!/bin/sh
-# install.sh [--prefix DIR] [--yes] [--uninstall]: install zellij-claude-workspace.
+# install.sh [--prefix DIR] [--yes] [--zellij-baseline] [--ghostty-baseline] [--uninstall]:
+# install zellij-claude-workspace.
 # Asks for the key locations (each with a default), shows what it will do, and
 # proceeds only on a yes. --yes, or a stdin that is not a terminal, takes the
 # defaults (and --prefix) without asking.
 # Symlinks the bin/ commands into the bin directory — symlinks work because the
 # scripts resolve their real directory (${0:A:h}) to find lib/ and share/.
 # Copies examples/claude.kdl to the layout path and writes the config file,
-# each only when absent, and never edits zellij's config.kdl: it prints the
-# settings to add. Idempotent.
+# each only when absent. Leaves zellij's config.kdl alone and prints the
+# settings to add, unless asked to replace it with examples/config.kdl.baseline;
+# likewise Ghostty's config with examples/config.ghostty.baseline. Both are
+# opt-in (a question, or --zellij-baseline / --ghostty-baseline), and a file
+# being replaced is first copied to <file>.bak.<timestamp>. Idempotent.
 # --uninstall removes only symlinks that point into this repo; config and
 # layout files are left alone.
 
@@ -19,15 +23,28 @@ default_layout="$HOME/.config/zellij/layouts/claude.kdl"
 prefix="$HOME/.local/bin"
 layout="${ZCW_LAYOUT:-$default_layout}"
 dirs=""
+zellij_cfg="${ZELLIJ_CONFIG_DIR:-${XDG_CONFIG_HOME:-$HOME/.config}/zellij}/config.kdl"
+ghostty_dir="${XDG_CONFIG_HOME:-$HOME/.config}/ghostty"
+ghostty_mac="$HOME/Library/Application Support/com.mitchellh.ghostty"
+# Ghostty >= 1.2 reads config.ghostty; replace a legacy `config` if that is all there is
+if [ ! -e "$ghostty_dir/config.ghostty" ] && [ -e "$ghostty_dir/config" ]; then
+  ghostty_cfg="$ghostty_dir/config"
+else
+  ghostty_cfg="$ghostty_dir/config.ghostty"
+fi
+zellij_baseline=0
+ghostty_baseline=0
 uninstall=0
 ask=1
 
-usage() { echo "usage: install.sh [--prefix DIR] [--yes] [--uninstall]"; }
+usage() { echo "usage: install.sh [--prefix DIR] [--yes] [--zellij-baseline] [--ghostty-baseline] [--uninstall]"; }
 while [ $# -gt 0 ]; do
   case $1 in
     --prefix) [ $# -ge 2 ] || { echo "install.sh: --prefix needs a directory" >&2; exit 2; }
               prefix=$2; shift 2 ;;
     -y|--yes) ask=0; shift ;;
+    --zellij-baseline) zellij_baseline=1; shift ;;
+    --ghostty-baseline) ghostty_baseline=1; shift ;;
     --uninstall) uninstall=1; shift ;;
     -h|--help) usage; exit 0 ;;
     *) usage >&2; exit 2 ;;
@@ -49,6 +66,45 @@ prompt() {
   printf '%s [%s]: ' "$1" "$2" >&2
   read -r _p_reply || _p_reply=
   untilde "${_p_reply:-$2}"
+}
+
+# yesno <question> <default 0|1>: print 1 for yes, 0 for no
+yesno() {
+  if [ "$2" -eq 1 ]; then printf '%s [Y/n]: ' "$1" >&2; else printf '%s [y/N]: ' "$1" >&2; fi
+  read -r _y_reply || _y_reply=
+  case $_y_reply in
+    [Yy]|[Yy][Ee][Ss]) echo 1 ;;
+    [Nn]|[Nn][Oo]) echo 0 ;;
+    *) echo "$2" ;;
+  esac
+}
+
+# plan_baseline <label> <file>: one plan line for replacing <file> with a baseline
+plan_baseline() {
+  if [ -e "$2" ]; then
+    printf '  %-9s replace %s with the baseline (old one kept as .bak.<timestamp>)\n' "$1" "$2"
+  else
+    printf '  %-9s create %s from the baseline\n' "$1" "$2"
+  fi
+}
+
+# apply_baseline <rendered file> <target>: install it, backing up a different
+# existing target first; removes the rendered file
+apply_baseline() {
+  if [ -e "$2" ] && cmp -s "$1" "$2"; then
+    rm -f "$1"
+    echo "kept $2 (already matches the baseline)"
+    return
+  fi
+  mkdir -p "$(dirname "$2")"
+  if [ -e "$2" ]; then
+    _b_bak="$2.bak.$(date +%Y%m%d%H%M%S)"
+    cp -p "$2" "$_b_bak"
+    echo "backed up $2 to $_b_bak"
+  fi
+  cat "$1" > "$2"   # writes through a symlinked config (dotfiles) instead of replacing it
+  rm -f "$1"
+  echo "installed baseline $2"
 }
 
 confirm() {
@@ -86,6 +142,10 @@ if [ "$ask" -eq 1 ]; then
   layout=$(prompt "Workspace layout file" "$layout")
   printf 'Project folders for `ztab --create <name>`, space-separated [none]: ' >&2
   read -r dirs || dirs=
+  [ "$zellij_baseline" -eq 1 ] ||
+    zellij_baseline=$(yesno "Replace zellij's $zellij_cfg with the baseline from examples/?" 0)
+  [ "$ghostty_baseline" -eq 1 ] ||
+    ghostty_baseline=$(yesno "Replace Ghostty's $ghostty_cfg with the baseline from examples/?" 0)
 fi
 
 expanded_dirs=""
@@ -107,6 +167,8 @@ else
   echo "  config    create $cfgdir/config"
 fi
 [ -z "$expanded_dirs" ] || echo "  projects  $expanded_dirs"
+[ "$zellij_baseline" -eq 0 ] || plan_baseline zellij "$zellij_cfg"
+[ "$ghostty_baseline" -eq 0 ] || plan_baseline ghostty "$ghostty_cfg"
 confirm
 echo
 
@@ -172,7 +234,26 @@ if [ "$layout" = "$default_layout" ]; then
 else
   layout_setting="default_layout \"$layout\""
 fi
-echo
-echo "Add these settings to your zellij config.kdl (not edited for you):"
-echo
-sed "s|^default_layout .*|$layout_setting|" "$here/examples/config.kdl.snippet" | sed 's/^/    /'
+
+if [ "$zellij_baseline" -eq 1 ]; then
+  tmp=$(mktemp)
+  sed "s|^default_layout .*|$layout_setting|" "$here/examples/config.kdl.baseline" > "$tmp"
+  apply_baseline "$tmp" "$zellij_cfg"
+fi
+
+if [ "$ghostty_baseline" -eq 1 ]; then
+  tmp=$(mktemp)
+  cp "$here/examples/config.ghostty.baseline" "$tmp"
+  apply_baseline "$tmp" "$ghostty_cfg"
+  # on macOS Ghostty also loads this one, after the XDG file, so it wins
+  for f in "$ghostty_mac/config.ghostty" "$ghostty_mac/config"; do
+    [ ! -e "$f" ] || echo "warning: $f also exists and overrides $ghostty_cfg; merge or remove it" >&2
+  done
+fi
+
+if [ "$zellij_baseline" -eq 0 ]; then
+  echo
+  echo "Add these settings to your zellij config.kdl (not edited for you):"
+  echo
+  sed "s|^default_layout .*|$layout_setting|" "$here/examples/config.kdl.snippet" | sed 's/^/    /'
+fi

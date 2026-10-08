@@ -39,6 +39,7 @@ the running session and remembers the state in the file.
 ```sh
 ./install.sh                    # asks for locations, shows a plan, asks "Proceed?"
 ./install.sh --yes [--prefix DIR]   # no questions: defaults (and --prefix)
+./install.sh --yes --zellij-baseline --ghostty-baseline   # also apply the baseline configs
 ./install.sh --uninstall        # removes only symlinks pointing into this repo
 ```
 
@@ -51,7 +52,17 @@ on a yes. It symlinks the commands into the bin directory, creates the layout
 choices, each only if absent, and warns about missing dependencies. Run
 without a terminal (piped, CI) it behaves like `--yes`.
 
-It never edits your zellij `config.kdl`; add the
+It also offers (default no) to replace your zellij `config.kdl` and Ghostty
+config (`~/.config/ghostty/config.ghostty`) with the full baselines in
+`examples/` — `config.kdl.baseline` and `config.ghostty.baseline`. A file being
+replaced is first copied to `<file>.bak.<timestamp>`; one that already matches
+is left alone. The Ghostty baseline starts `zstart` in the first window and
+maps Cmd shortcuts to the zellij bindings in the zellij baseline, so the two
+go together. On macOS, a config under
+`~/Library/Application Support/com.mitchellh.ghostty/` overrides it; the
+installer warns if one exists.
+
+Without the zellij baseline, `config.kdl` is not edited; add the
 settings from `examples/config.kdl.snippet`:
 
 ```kdl

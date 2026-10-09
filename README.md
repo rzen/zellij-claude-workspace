@@ -34,6 +34,7 @@ the running session and remembers the state in the file.
 - zellij 0.44 or newer (`list-tabs --state`, `close-tab-by-id`, `move-tab`)
 - Claude Code (`claude` on PATH)
 - python3, zsh, git; macOS or Linux
+- Optional: [fswatch](https://github.com/emcrisostomo/fswatch), for the `lanework:watch` skill (the installer offers to `brew install` it)
 
 ## Install
 
@@ -56,6 +57,7 @@ are live):
 ./install.sh                    # asks for locations, shows a plan, asks "Proceed?"
 ./install.sh --yes [--prefix DIR]   # no questions: defaults (and --prefix)
 ./install.sh --yes --path       # ...and add the bin directory to PATH in ~/.zprofile
+./install.sh --yes --deps       # ...and brew install optional tools (fswatch) if missing
 ./install.sh --yes --zellij-baseline --ghostty-baseline   # also apply the baseline configs
 ./install.sh --uninstall        # removes only symlinks pointing into this repo
 ```
@@ -74,6 +76,11 @@ The panes run `zsh -lc`, so the bin directory has to be on PATH for a login
 shell, not just in `~/.zshrc`. The installer checks exactly that, and when it
 is missing offers to add it to `~/.zprofile` (`--path` says yes without
 asking); declined, it ends with the line to add yourself.
+
+If `fswatch` is missing and Homebrew is installed, it offers to
+`brew install fswatch` for the `lanework:watch` skill (`--deps` says yes
+without asking). It is optional: without Homebrew, on `--update`, or
+declined, the installer only mentions it.
 
 It also offers (default no) to replace your zellij `config.kdl` and Ghostty
 config (`~/.config/ghostty/config.ghostty`) with the full baselines in

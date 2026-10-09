@@ -1,5 +1,5 @@
 #!/bin/sh
-# install.sh [--prefix DIR] [--yes] [--path] [--zellij-baseline] [--ghostty-baseline] [--update|--uninstall]:
+# install.sh [--prefix DIR] [--yes] [--path] [--deps] [--zellij-baseline] [--ghostty-baseline] [--update|--uninstall]:
 # install zellij-claude-workspace. bootstrap.sh (the curl one-liner) clones the
 # repo and runs this from the clone; it also works from any checkout.
 # Asks for the key locations (each with a default), shows what it will do, and
@@ -17,6 +17,9 @@
 # since they run `zsh -lc` — and offers to add it to ~/.zprofile when it is
 # missing there (--path says yes without asking). Needs zsh and python3; warns
 # about a missing claude or a zellij older than 0.44.
+# Offers to `brew install` optional tools that are missing — fswatch, which the
+# lanework:watch skill uses in the workspace — when Homebrew is there (--deps
+# says yes without asking); otherwise, and on --update, it only mentions them.
 # --update is the update path (zupdate, bootstrap.sh on an existing clone):
 # no questions, relinks the commands (new ones get linked, links to removed
 # ones are cleaned up), runs `ztab --heal`, and touches nothing else.
@@ -45,10 +48,15 @@ ghostty_baseline=0
 uninstall=0
 update=0
 path_fix=0
+deps=0
+pkgs=""
+# optional tools, offered but never required: command names, each also its
+# Homebrew formula. fswatch: the lanework:watch skill.
+optional="fswatch"
 ask=1
 zprofile="${ZDOTDIR:-$HOME}/.zprofile"
 
-usage() { echo "usage: install.sh [--prefix DIR] [--yes] [--path] [--zellij-baseline] [--ghostty-baseline] [--update|--uninstall]"; }
+usage() { echo "usage: install.sh [--prefix DIR] [--yes] [--path] [--deps] [--zellij-baseline] [--ghostty-baseline] [--update|--uninstall]"; }
 while [ $# -gt 0 ]; do
   case $1 in
     --prefix) [ $# -ge 2 ] || { echo "install.sh: --prefix needs a directory" >&2; exit 2; }
@@ -57,6 +65,7 @@ while [ $# -gt 0 ]; do
     --zellij-baseline) zellij_baseline=1; shift ;;
     --ghostty-baseline) ghostty_baseline=1; shift ;;
     --path) path_fix=1; shift ;;
+    --deps) deps=1; shift ;;
     --update) update=1; ask=0; shift ;;
     --uninstall) uninstall=1; shift ;;
     -h|--help) usage; exit 0 ;;
@@ -162,8 +171,23 @@ path_line() {
   esac
 }
 
+# has_cmd <cmd>: on this PATH or a login zsh's
+has_cmd() {
+  command -v "$1" >/dev/null 2>&1 || zsh -lc "command -v $1" >/dev/null 2>&1
+}
+
+# find_brew: print Homebrew's path; it may be set up only for login shells or
+# not at all on PATH, so look in its standard prefixes too
+find_brew() {
+  command -v brew 2>/dev/null && return
+  for _b in /opt/homebrew/bin/brew /usr/local/bin/brew /home/linuxbrew/.linuxbrew/bin/brew; do
+    [ -x "$_b" ] && { echo "$_b"; return; }
+  done
+  return 0
+}
+
 # finish: put $prefix on the login PATH if agreed, then say what is still
-# missing for the panes to start
+# missing for the panes to start, and which optional tools are missing
 finish() {
   if [ "$path_ok" -eq 0 ] && [ "$path_fix" -eq 1 ]; then
     printf '\n# zellij-claude-workspace: the commands, for login shells (zellij panes run zsh -lc)\n%s\n' "$(path_line)" >> "$zprofile"
@@ -184,6 +208,16 @@ finish() {
     echo
     echo "Before the workspace will start:$_f_left"
     echo "then open a new terminal."
+  fi
+  _f_opt=""
+  for c in $optional; do has_cmd "$c" || _f_opt="$_f_opt $c"; done
+  if [ -n "$_f_opt" ]; then
+    echo
+    if [ -n "$brew" ]; then
+      echo "Optional:$_f_opt not installed (the lanework:watch skill uses fswatch): brew install$_f_opt"
+    else
+      echo "Optional:$_f_opt not installed (the lanework:watch skill uses fswatch); install it with your package manager"
+    fi
   fi
 }
 
@@ -236,6 +270,9 @@ fi
 command -v claude >/dev/null 2>&1 || echo "warning: claude not found on PATH; install Claude Code before running zstart" >&2
 
 if on_login_path "$prefix"; then path_ok=1; else path_ok=0; fi
+brew=$(find_brew)
+missing_opt=""
+for c in $optional; do has_cmd "$c" || missing_opt="$missing_opt${missing_opt:+ }$c"; done
 
 if [ "$update" -eq 1 ]; then
   link_commands
@@ -259,7 +296,11 @@ if [ "$ask" -eq 1 ]; then
   if on_login_path "$prefix"; then path_ok=1; else path_ok=0; fi
   [ "$path_ok" -eq 1 ] || [ "$path_fix" -eq 1 ] ||
     path_fix=$(yesno "$prefix is not on a login shell's PATH, which the panes need. Add it to $zprofile?" 1)
+  if [ -n "$missing_opt" ] && [ -n "$brew" ] && [ "$deps" -eq 0 ]; then
+    deps=$(yesno "Install $missing_opt with Homebrew? (optional; the lanework:watch skill uses fswatch)" 1)
+  fi
 fi
+[ -z "$missing_opt" ] || [ -z "$brew" ] || [ "$deps" -eq 0 ] || pkgs=$missing_opt
 
 expanded_dirs=""
 for d in $dirs; do
@@ -270,6 +311,7 @@ echo
 echo "Install plan:"
 echo "  commands  link into $prefix"
 [ "$path_ok" -eq 1 ] || [ "$path_fix" -eq 0 ] || echo "  path      add $prefix to PATH in $zprofile"
+[ -z "$pkgs" ] || echo "  packages  brew install $pkgs"
 if [ -e "$layout" ]; then
   echo "  layout    keep existing $layout"
 else
@@ -287,6 +329,13 @@ confirm
 echo
 
 link_commands
+if [ -n "$pkgs" ]; then
+  if "$brew" install $pkgs; then   # unquoted: a word list
+    echo "installed $pkgs"
+  else
+    echo "warning: brew install $pkgs failed; the workspace works without it" >&2
+  fi
+fi
 
 if [ -e "$layout" ]; then
   echo "kept existing layout $layout"

@@ -1,5 +1,5 @@
 #!/bin/zsh
-# ztab [<tab>...|--list|--create <name> [path]|--reconfigure <tab>|--help]:
+# ztab [<tab>...|--list|--create <name> [path]|--reconfigure <tab>|--remove <tab>|--help]:
 # toggle zellij layout tabs on/off in the running session — close each named
 # tab if it is open, otherwise open it in its layout position. Any number of
 # tabs can be named at once; each name resolves exactly, else
@@ -20,6 +20,9 @@
 # shape is live — unless it is the tab this shell sits in, since closing it
 # would take the shell along, in which case only the file changes and ztab says
 # what to run from another tab.
+# With --remove (-x), removes a tab's block from the layout and
+# closes the tab if it is open; its claude sessions stay on disk, so a later
+# --create of the same name resumes them. The layout's last tab is kept.
 # --help (-h) prints usage.
 #
 # Settings come from ${XDG_CONFIG_HOME:-$HOME/.config}/zellij-claude-workspace/config
@@ -216,6 +219,7 @@ usage: ztab                                             list tabs and their stat
        ztab <tab>...                                    toggle: close if open, else open in layout position
        ztab -c|--create <name> [path]                   append a tab to the layout and open it
        ztab -r|--reconfigure <tab>                      rewrite a tab from the template; reopen it if open
+       ztab -x|--remove <tab>                           remove a tab from the layout; close it if open
        ztab -h|--help
 
 template  "<Tab> Pitwall" + "<Tab> Main" named claudes | "<Tab> Scratch" named claude / "<Tab> Shell"
@@ -402,6 +406,48 @@ ztab() {
     fi
     _ztab_toggle "$want" "$layout" && _ztab_toggle "$want" "$layout"
     return
+  fi
+
+  if [[ $1 == (-x|--remove) ]]; then
+    shift
+    (( $# == 1 )) || { print -ru2 "ztab: usage: ztab --remove <tab>"; return 1 }
+    local want
+    want=$(_ztab_resolve "$1") || return 1
+    (( $#defined > 1 )) || { print -ru2 "ztab: $want is the layout's only tab; not removing it"; return 1 }
+
+    # drop the tab's block, plus the blank line --create put above it
+    local tmp
+    tmp=$(mktemp "${${TMPDIR:-/tmp}%/}/ztab.XXXXXX") || return 1
+    ZTAB_NAME=$want awk '
+      BEGIN { name = ENVIRON["ZTAB_NAME"] }
+      { line[NR] = $0 }
+      !start && /^[[:space:]]*(\/-)?tab name="/ {
+        match($0, /name="[^"]*"/)
+        if (substr($0, RSTART + 6, RLENGTH - 7) == name) { start = NR; depth = 0 }
+      }
+      start && !end {
+        depth += gsub(/\{/, "{") - gsub(/\}/, "}")
+        if (depth <= 0) end = NR
+      }
+      END {
+        if (!end) exit 3
+        if (start > 1 && line[start - 1] ~ /^[[:space:]]*$/) start--
+        for (i = 1; i <= NR; i++) if (i < start || i > end) print line[i]
+      }' "$layout" > "$tmp"
+    if (( $? )) || [[ ! -s $tmp ]]; then
+      rm -f "$tmp"
+      print -ru2 "ztab: could not remove $want from $layout"
+      return 1
+    fi
+    cp "$tmp" "$layout" || { rm -f "$tmp"; return 1 }   # cp, not mv: keeps the file's mode
+    rm -f "$tmp"
+    print -r -- "ztab: removed $want from $layout"
+
+    # the file is already written, so closing the tab this shell sits in is safe
+    [[ -n ${open_id[$want]} ]] || return 0
+    zellij action close-tab-by-id ${open_id[$want]} >/dev/null || return 1
+    print -r -- "ztab: closed $want"
+    return 0
   fi
 
   # resolve every argument before toggling any of them

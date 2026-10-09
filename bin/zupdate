@@ -1,0 +1,48 @@
+#!/bin/zsh
+# zupdate: update zellij-claude-workspace from its git remote — fast-forward
+# the checkout these commands live in, then `install.sh --update` (link new
+# commands, clean up links to removed ones, ztab --heal the layout). The same
+# thing re-running the curl one-liner does. A checkout with uncommitted
+# changes, or not on a branch that fast-forwards, is left alone. Commands
+# already running are unaffected; open tabs pick up a healed layout when
+# reopened (or after zstop, then zstart).
+# The links are refreshed in the directory zupdate was run from, so a custom
+# install --prefix is kept.
+#
+# Everything runs inside zupdate_main, called on the last line: zsh reads a
+# script as it goes, and the pull may rewrite this very file mid-run.
+# The script's path is captured out here: inside a function $0 is its name.
+# ${0:A} resolves the link to the checkout; ${0:a} keeps the link's directory.
+
+_zupdate_repo=${0:A:h:h}
+_zupdate_prefix=${0:a:h}
+
+zupdate_main() {
+  local repo=$_zupdate_repo prefix=$_zupdate_prefix old new
+  [[ $1 == (-h|--help) ]] && { print "usage: zupdate"; return 0 }
+  (( $# == 0 )) || { print -ru2 "usage: zupdate"; return 2 }
+  git -C $repo rev-parse --git-dir >/dev/null 2>&1 || { print -ru2 "zupdate: $repo is not a git checkout"; return 1 }
+  [[ -z $(git -C $repo status --porcelain --untracked-files=no) ]] || {
+    print -ru2 "zupdate: $repo has local changes; commit or discard them, then run again"
+    return 1
+  }
+
+  old=$(git -C $repo rev-parse HEAD)
+  git -C $repo pull --ff-only --quiet || { print -ru2 "zupdate: could not update $repo (git pull --ff-only failed)"; return 1 }
+  new=$(git -C $repo rev-parse HEAD)
+  if [[ $old == $new ]]; then
+    print -r -- "zellij-claude-workspace is up to date ($repo)"
+  else
+    print -r -- "updated $repo:"
+    git -C $repo log --oneline $old..$new | sed 's/^/  /'
+  fi
+
+  # run straight from the checkout, there is no link dir to keep: use the default
+  if [[ $prefix == $repo/bin ]]; then
+    sh $repo/install.sh --update
+  else
+    sh $repo/install.sh --update --prefix $prefix
+  fi
+}
+
+zupdate_main "$@"

@@ -25,20 +25,37 @@ the running session and remembers the state in the file.
 - `ztab --create` appends a new tab from a template and opens it; `--reconfigure` rewrites a tab from the template; `--remove` removes one; `--heal` updates a layout written under older conventions.
 - `zstop` tears everything down; `zstop --strays` (run by `zstart`) removes stray zellij sessions.
 - `claude_list_sessions` lists Claude sessions for a directory (or all).
+- One-line install from GitHub; `zupdate` (or the same one-liner) updates in place.
 - Interactive installer: asks for the key locations, shows a plan, installs on a yes.
 - Customizable: config file for session name, layout path, project directories, and a tab template.
 
 ## Requirements
 
-- zellij 0.45 or newer (`list-tabs --state`, `close-tab-by-id`, `move-tab`)
+- zellij 0.44 or newer (`list-tabs --state`, `close-tab-by-id`, `move-tab`)
 - Claude Code (`claude` on PATH)
-- python3, zsh; macOS or Linux
+- python3, zsh, git; macOS or Linux
 
 ## Install
 
 ```sh
+curl -fsSL https://raw.githubusercontent.com/rzen/zellij-claude-workspace/main/bootstrap.sh | sh
+```
+
+This clones the repo into `~/.local/share/zellij-claude-workspace` (`ZCW_HOME`
+overrides) and runs its `install.sh`, which asks its questions on the terminal
+as usual. Pass installer flags after `sh -s --`:
+
+```sh
+curl -fsSL https://raw.githubusercontent.com/rzen/zellij-claude-workspace/main/bootstrap.sh | sh -s -- --yes --path
+```
+
+Or from a checkout of your own (the commands then link into it, so edits there
+are live):
+
+```sh
 ./install.sh                    # asks for locations, shows a plan, asks "Proceed?"
 ./install.sh --yes [--prefix DIR]   # no questions: defaults (and --prefix)
+./install.sh --yes --path       # ...and add the bin directory to PATH in ~/.zprofile
 ./install.sh --yes --zellij-baseline --ghostty-baseline   # also apply the baseline configs
 ./install.sh --uninstall        # removes only symlinks pointing into this repo
 ```
@@ -49,8 +66,14 @@ Enter: the bin directory for the commands (`~/.local/bin`), the layout file
 `ztab --create` should search (none). It then shows the plan and installs only
 on a yes. It symlinks the commands into the bin directory, creates the layout
 (one `Home` tab) and `~/.config/zellij-claude-workspace/config` with your
-choices, each only if absent, and warns about missing dependencies. Run
-without a terminal (piped, CI) it behaves like `--yes`.
+choices, each only if absent. It needs zsh and python3, and warns about a
+missing `claude` or a zellij older than 0.44. Run without a terminal (CI) it
+behaves like `--yes`.
+
+The panes run `zsh -lc`, so the bin directory has to be on PATH for a login
+shell, not just in `~/.zshrc`. The installer checks exactly that, and when it
+is missing offers to add it to `~/.zprofile` (`--path` says yes without
+asking); declined, it ends with the line to add yourself.
 
 It also offers (default no) to replace your zellij `config.kdl` and Ghostty
 config (`~/.config/ghostty/config.ghostty`) with the full baselines in
@@ -79,6 +102,19 @@ The installed layout has one `Home` tab rooted at `$HOME`; add projects with `zt
 
 Panes run `zsh -lc`, so `claude` and these scripts must be on PATH from a login shell (`~/.zprofile`), not just `~/.zshrc`.
 
+## Updating
+
+```sh
+zupdate
+```
+
+Fast-forwards the checkout the commands live in, links any new command and
+cleans up links to removed ones, and runs `ztab --heal` so your layout follows
+renamed conventions. Re-running the curl one-liner does the same. Your layout,
+config and tab template are never replaced; a checkout with uncommitted
+changes is left alone. Open tabs pick up a healed layout when reopened (or
+after `zstop`, then `zstart`).
+
 ## Daily use
 
 ```sh
@@ -92,6 +128,7 @@ ztab --heal               # bring an older layout (and a custom template) up to 
 zstop                     # kill every zellij session (panes resume on the next zstart)
 zstop --strays            # kill only sessions other than the workspace
 claude_list_sessions [-a] # Claude sessions for this directory (-a: all)
+zupdate                   # update from the git remote, relink, heal the layout
 ```
 
 `ztab` only works inside the workspace session, except `--heal`, which only

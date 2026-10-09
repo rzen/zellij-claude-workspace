@@ -1,6 +1,7 @@
 #!/bin/sh
-# install.sh [--prefix DIR] [--yes] [--zellij-baseline] [--ghostty-baseline] [--uninstall]:
-# install zellij-claude-workspace.
+# install.sh [--prefix DIR] [--yes] [--path] [--zellij-baseline] [--ghostty-baseline] [--update|--uninstall]:
+# install zellij-claude-workspace. bootstrap.sh (the curl one-liner) clones the
+# repo and runs this from the clone; it also works from any checkout.
 # Asks for the key locations (each with a default), shows what it will do, and
 # proceeds only on a yes. --yes, or a stdin that is not a terminal, takes the
 # defaults (and --prefix) without asking.
@@ -12,6 +13,13 @@
 # likewise Ghostty's config with examples/config.ghostty.baseline. Both are
 # opt-in (a question, or --zellij-baseline / --ghostty-baseline), and a file
 # being replaced is first copied to <file>.bak.<timestamp>. Idempotent.
+# Checks the bin directory the way the panes will see it — from a login zsh,
+# since they run `zsh -lc` — and offers to add it to ~/.zprofile when it is
+# missing there (--path says yes without asking). Needs zsh and python3; warns
+# about a missing claude or a zellij older than 0.44.
+# --update is the update path (zupdate, bootstrap.sh on an existing clone):
+# no questions, relinks the commands (new ones get linked, links to removed
+# ones are cleaned up), runs `ztab --heal`, and touches nothing else.
 # --uninstall removes only symlinks that point into this repo; config and
 # layout files are left alone.
 
@@ -35,9 +43,12 @@ fi
 zellij_baseline=0
 ghostty_baseline=0
 uninstall=0
+update=0
+path_fix=0
 ask=1
+zprofile="${ZDOTDIR:-$HOME}/.zprofile"
 
-usage() { echo "usage: install.sh [--prefix DIR] [--yes] [--zellij-baseline] [--ghostty-baseline] [--uninstall]"; }
+usage() { echo "usage: install.sh [--prefix DIR] [--yes] [--path] [--zellij-baseline] [--ghostty-baseline] [--update|--uninstall]"; }
 while [ $# -gt 0 ]; do
   case $1 in
     --prefix) [ $# -ge 2 ] || { echo "install.sh: --prefix needs a directory" >&2; exit 2; }
@@ -45,12 +56,15 @@ while [ $# -gt 0 ]; do
     -y|--yes) ask=0; shift ;;
     --zellij-baseline) zellij_baseline=1; shift ;;
     --ghostty-baseline) ghostty_baseline=1; shift ;;
+    --path) path_fix=1; shift ;;
+    --update) update=1; ask=0; shift ;;
     --uninstall) uninstall=1; shift ;;
     -h|--help) usage; exit 0 ;;
     *) usage >&2; exit 2 ;;
   esac
 done
 [ -t 0 ] || ask=0
+prefix=${prefix%/}
 
 # expand a leading ~ the way a shell would; read leaves it literal
 untilde() {
@@ -107,6 +121,72 @@ apply_baseline() {
   echo "installed baseline $2"
 }
 
+# on_login_path <dir>: whether a login zsh — what the panes run — has <dir>
+# on PATH. The installer's own PATH can say yes while the panes say no, e.g.
+# when ~/.zshrc adds it, which `zsh -lc` never reads.
+on_login_path() {
+  case ":$(zsh -lc 'printf %s "$PATH"' 2>/dev/null):" in
+    *":$1:"*) return 0 ;;
+  esac
+  return 1
+}
+
+# link_commands: symlink bin/* into $prefix, and remove links there that point
+# into this repo's bin/ at a command that no longer exists
+link_commands() {
+  mkdir -p "$prefix"
+  for src in "$here"/bin/*; do
+    [ -f "$src" ] || continue   # lib/ stays put: the scripts find it via their real path
+    dst="$prefix/$(basename "$src")"
+    if [ -e "$dst" ] && [ ! -L "$dst" ]; then
+      echo "skipped $dst (exists and is not a symlink)" >&2
+      continue
+    fi
+    [ "$(readlink "$dst" 2>/dev/null)" = "$src" ] && continue
+    ln -sfn "$src" "$dst"
+    echo "linked $dst"
+  done
+  for dst in "$prefix"/*; do
+    [ -L "$dst" ] && [ ! -e "$dst" ] || continue
+    case $(readlink "$dst") in
+      "$here"/bin/*) rm "$dst"; echo "removed $dst (no longer a command)" ;;
+    esac
+  done
+}
+
+# path_line: the ~/.zprofile line that puts $prefix on PATH, $HOME kept symbolic
+path_line() {
+  case $prefix in
+    "$HOME"/*) printf 'export PATH="$HOME/%s:$PATH"' "${prefix#"$HOME"/}" ;;
+    *) printf 'export PATH="%s:$PATH"' "$prefix" ;;
+  esac
+}
+
+# finish: put $prefix on the login PATH if agreed, then say what is still
+# missing for the panes to start
+finish() {
+  if [ "$path_ok" -eq 0 ] && [ "$path_fix" -eq 1 ]; then
+    printf '\n# zellij-claude-workspace: the commands, for login shells (zellij panes run zsh -lc)\n%s\n' "$(path_line)" >> "$zprofile"
+    echo "added $prefix to PATH in $zprofile"
+    path_ok=1
+  fi
+  _f_left=""
+  if [ "$path_ok" -eq 0 ]; then
+    _f_left="$_f_left
+  add $prefix to PATH for login shells — append to $zprofile:
+    $(path_line)"
+  fi
+  if ! zsh -lc 'command -v claude' >/dev/null 2>&1; then
+    _f_left="$_f_left
+  put claude on PATH for login shells ($zprofile); a login zsh cannot find it"
+  fi
+  if [ -n "$_f_left" ]; then
+    echo
+    echo "Before the workspace will start:$_f_left"
+    echo "then open a new terminal."
+  fi
+}
+
 confirm() {
   [ "$ask" -eq 1 ] || return 0
   printf '\nProceed? [y/N] ' >&2
@@ -132,6 +212,35 @@ if [ "$uninstall" -eq 1 ]; then
       esac
     fi
   done
+  echo "the code itself stays in $here; delete it to remove it too"
+  exit 0
+fi
+
+# prerequisites: the scripts are zsh, and claude_create_or_resume needs python3
+_missing=""
+for cmd in zsh python3; do
+  command -v "$cmd" >/dev/null 2>&1 || _missing="$_missing $cmd"
+done
+[ -z "$_missing" ] || { echo "install.sh: needs$_missing; install it and run again" >&2; exit 1; }
+if command -v zellij >/dev/null 2>&1; then
+  _zv=$(zellij --version 2>/dev/null | awk '{print $2}')
+  _zmaj=${_zv%%.*}; _zmin=${_zv#*.}; _zmin=${_zmin%%.*}
+  case $_zmaj$_zmin in
+    ''|*[!0-9]*) ;;
+    *) [ "$_zmaj" -gt 0 ] || [ "$_zmin" -ge 44 ] ||
+         echo "warning: zellij $_zv is older than 0.44, which ztab needs" >&2 ;;
+  esac
+else
+  echo "warning: zellij not found on PATH; install it before running zstart" >&2
+fi
+command -v claude >/dev/null 2>&1 || echo "warning: claude not found on PATH; install Claude Code before running zstart" >&2
+
+if on_login_path "$prefix"; then path_ok=1; else path_ok=0; fi
+
+if [ "$update" -eq 1 ]; then
+  link_commands
+  zsh "$here/bin/ztab" --heal || echo "warning: ztab --heal failed; run it by hand" >&2
+  finish
   exit 0
 fi
 
@@ -146,6 +255,10 @@ if [ "$ask" -eq 1 ]; then
     zellij_baseline=$(yesno "Replace zellij's $zellij_cfg with the baseline from examples/?" 0)
   [ "$ghostty_baseline" -eq 1 ] ||
     ghostty_baseline=$(yesno "Replace Ghostty's $ghostty_cfg with the baseline from examples/?" 0)
+  prefix=${prefix%/}
+  if on_login_path "$prefix"; then path_ok=1; else path_ok=0; fi
+  [ "$path_ok" -eq 1 ] || [ "$path_fix" -eq 1 ] ||
+    path_fix=$(yesno "$prefix is not on a login shell's PATH, which the panes need. Add it to $zprofile?" 1)
 fi
 
 expanded_dirs=""
@@ -156,6 +269,7 @@ done
 echo
 echo "Install plan:"
 echo "  commands  link into $prefix"
+[ "$path_ok" -eq 1 ] || [ "$path_fix" -eq 0 ] || echo "  path      add $prefix to PATH in $zprofile"
 if [ -e "$layout" ]; then
   echo "  layout    keep existing $layout"
 else
@@ -172,17 +286,7 @@ fi
 confirm
 echo
 
-mkdir -p "$prefix"
-for src in "$here"/bin/*; do
-  [ -f "$src" ] || continue   # lib/ stays put: the scripts find it via their real path
-  dst="$prefix/$(basename "$src")"
-  if [ -e "$dst" ] && [ ! -L "$dst" ]; then
-    echo "skipped $dst (exists and is not a symlink)" >&2
-    continue
-  fi
-  ln -sfn "$src" "$dst"
-  echo "linked $dst"
-done
+link_commands
 
 if [ -e "$layout" ]; then
   echo "kept existing layout $layout"
@@ -220,14 +324,6 @@ else
   echo "installed config $cfgdir/config"
 fi
 
-for cmd in zellij claude python3 zsh; do
-  command -v "$cmd" >/dev/null 2>&1 || echo "warning: $cmd not found on PATH" >&2
-done
-case ":$PATH:" in
-  *":$prefix:"*) ;;
-  *) echo "warning: $prefix is not on PATH; add it in ~/.zprofile (panes run zsh -lc)" >&2 ;;
-esac
-
 # default_layout takes a name from zellij's layouts dir, or a path
 if [ "$layout" = "$default_layout" ]; then
   layout_setting='default_layout "claude"'
@@ -257,3 +353,5 @@ if [ "$zellij_baseline" -eq 0 ]; then
   echo
   sed "s|^default_layout .*|$layout_setting|" "$here/examples/config.kdl.snippet" | sed 's/^/    /'
 fi
+
+finish

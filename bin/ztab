@@ -1,5 +1,5 @@
 #!/bin/zsh
-# ztab [<tab>...|--list|--create <name> [path]|--reconfigure <tab>|--remove <tab>|--help]:
+# ztab [<tab>...|--list|--create <name> [path]|--reconfigure <tab>|--remove <tab>|--heal|--help]:
 # toggle zellij layout tabs on/off in the running session — close each named
 # tab if it is open, otherwise open it in its layout position. Any number of
 # tabs can be named at once; each name resolves exactly, else
@@ -23,6 +23,9 @@
 # With --remove (-x), removes a tab's block from the layout and
 # closes the tab if it is open; its claude sessions stay on disk, so a later
 # --create of the same name resumes them. The layout's last tab is kept.
+# With --heal, applies every renormalizing step (see _ztab_heal) to the layout
+# and to a custom tab template, for files written under older conventions;
+# it only edits files, so open tabs pick the changes up when reopened.
 # --help (-h) prints usage.
 #
 # Settings come from ${XDG_CONFIG_HOME:-$HOME/.config}/zellij-claude-workspace/config
@@ -212,6 +215,35 @@ _ztab_resolve() {
   print -r -- "$want"
 }
 
+# _ztab_heal <file>: bring a layout or tab template up to the current
+# conventions, in place. Returns 0 when it changed the file, 1 when it was
+# already current, 2 on error. The steps, oldest first; each must be
+# idempotent, and new ones go at the end:
+#   1. the left claude's role "Pitwall" is now "Watch" — pane name and session
+#      name (claude_create_or_resume still finds "<Tab> Pitwall" transcripts)
+_ztab_heal() {
+  local file=$1 tmp
+  tmp=$(mktemp "${${TMPDIR:-/tmp}%/}/ztab.XXXXXX") || return 2
+  awk -v q="'" '
+    {
+      # 1. Pitwall -> Watch
+      gsub(/ Pitwall"/, " Watch\"")
+      gsub(" Pitwall" q, " Watch" q)
+      print
+    }' "$file" > "$tmp"
+  if (( $? )) || [[ ! -s $tmp ]]; then
+    rm -f "$tmp"
+    print -ru2 "ztab: could not heal $file"
+    return 2
+  fi
+  if cmp -s "$tmp" "$file"; then
+    rm -f "$tmp"
+    return 1
+  fi
+  cp "$tmp" "$file" || { rm -f "$tmp"; return 2 }   # cp, not mv: keeps the file's mode
+  rm -f "$tmp"
+}
+
 _ztab_usage() {
   cat <<EOF
 usage: ztab                                             list tabs and their state
@@ -220,9 +252,10 @@ usage: ztab                                             list tabs and their stat
        ztab -c|--create <name> [path]                   append a tab to the layout and open it
        ztab -r|--reconfigure <tab>                      rewrite a tab from the template; reopen it if open
        ztab -x|--remove <tab>                           remove a tab from the layout; close it if open
+       ztab --heal                                      bring the layout (and a custom template) up to current conventions
        ztab -h|--help
 
-template  "<Tab> Pitwall" + "<Tab> Main" named claudes | "<Tab> Scratch" named claude / "<Tab> Shell"
+template  "<Tab> Watch" + "<Tab> Main" named claudes | "<Tab> Scratch" named claude / "<Tab> Shell"
           $ZCW_TAB_TEMPLATE  (ZCW_TAB_TEMPLATE overrides)
 tabs      names resolve exactly, else case-insensitively, else by unique prefix
 layout    $ZCW_LAYOUT  (ZCW_LAYOUT overrides)
@@ -235,6 +268,27 @@ ztab() {
   setopt extended_glob
   local layout=$ZCW_LAYOUT
   [[ $1 == (-h|--help) ]] && { _ztab_usage; return 0 }
+
+  # --heal only edits files, so it works outside the session too
+  if [[ $1 == --heal ]]; then
+    (( $# == 1 )) || { print -ru2 "ztab: usage: ztab --heal"; return 1 }
+    [[ -w "$layout" ]] || { print -ru2 "ztab: cannot write layout: $layout"; return 1 }
+    local -a files=($layout)
+    # a user's own template, not the repo's share/tab.kdl, which ships current
+    [[ $ZCW_TAB_TEMPLATE != ${_ztab_dir:h}/share/tab.kdl && -w $ZCW_TAB_TEMPLATE ]] && files+=($ZCW_TAB_TEMPLATE)
+    local f healed=0
+    for f in $files; do
+      _ztab_heal "$f"
+      case $? in
+        0) print -r -- "ztab: healed $f"; healed=1 ;;
+        1) print -r -- "ztab: $f is already current" ;;
+        *) return 1 ;;
+      esac
+    done
+    (( healed )) && print -r -- "ztab: open tabs keep their old shape until reopened (zstop, then zstart, rebuilds them all)"
+    return 0
+  fi
+
   [[ -n "$ZELLIJ" ]] || { print -ru2 "ztab: not inside a zellij session"; return 1 }
   [[ -r "$layout" ]] || { print -ru2 "ztab: cannot read layout: $layout"; return 1 }
 

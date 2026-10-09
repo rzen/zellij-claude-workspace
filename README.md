@@ -7,7 +7,7 @@ sessions plus a shell:
 ```
 +-------------------+-------------------+-------------------+
 |                   |                   |  <Tab> Scratch    |
-|  <Tab> Pitwall    |  <Tab> Main       |  (claude)         |
+|  <Tab> Watch      |  <Tab> Main       |  (claude)         |
 |  (claude)         |  (claude)         +-------------------+
 |                   |                   |  <Tab> Shell      |
 +-------------------+-------------------+-------------------+
@@ -22,7 +22,7 @@ the running session and remembers the state in the file.
 - Named Claude Code sessions per pane: `claude_create_or_resume '<Tab> Main'` resumes the newest transcript with that name in the directory, or creates it on first use. The name survives `/clear`.
 - Never two claudes on one session: a duplicate waits briefly, then refuses.
 - `ztab` toggles any number of tabs (exact, case-insensitive or unique-prefix names), opening them in layout position; the toggle persists via KDL slashdash (`/-`).
-- `ztab --create` appends a new tab from a template and opens it; `--reconfigure` rewrites a tab from the template; `--remove` removes one.
+- `ztab --create` appends a new tab from a template and opens it; `--reconfigure` rewrites a tab from the template; `--remove` removes one; `--heal` updates a layout written under older conventions.
 - `zstop` tears everything down; `zstop --strays` (run by `zstart`) removes stray zellij sessions.
 - `claude_list_sessions` lists Claude sessions for a directory (or all).
 - Interactive installer: asks for the key locations, shows a plan, installs on a yes.
@@ -88,13 +88,15 @@ ztab api web              # toggle tabs: close if open, else open in layout posi
 ztab -c mytool [path]     # append a tab (cwd: path, else a match in ZCW_PROJECT_DIRS, else $PWD) and open it
 ztab -r mytool            # rewrite a tab from the template; reopen it if open
 ztab -x mytool            # remove a tab from the layout; close it if open
+ztab --heal               # bring an older layout (and a custom template) up to current conventions
 zstop                     # kill every zellij session (panes resume on the next zstart)
 zstop --strays            # kill only sessions other than the workspace
 claude_list_sessions [-a] # Claude sessions for this directory (-a: all)
 ```
 
-`ztab` only works inside the workspace session. `--reconfigure` on the tab you
-are sitting in changes the file only and tells you what to run from another tab.
+`ztab` only works inside the workspace session, except `--heal`, which only
+edits files. `--reconfigure` on the tab you are sitting in changes the file
+only and tells you what to run from another tab.
 
 ## The layout is the source of truth
 

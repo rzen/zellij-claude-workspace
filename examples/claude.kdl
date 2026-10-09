@@ -3,7 +3,7 @@
 //
 // Every tab is stamped from the tab template (share/tab.kdl) — two interactive
 // sessions plus a scratch column:
-//   left:   pane "<Tab> Pitwall"   — claude_create_or_resume "<Tab> Pitwall":
+//   left:   pane "<Tab> Watch"     — claude_create_or_resume "<Tab> Watch":
 //           resumes that named session, or creates it (labeled) on first use
 //   middle: pane "<Tab> Main" — same, for "<Tab> Main"
 //   right:  horizontal split — pane "<Tab> Scratch" on top:
@@ -57,8 +57,8 @@ layout {
     // tab and add your own with `ztab --create <name> [path]`.
     tab name="Home" cwd="/path/to/project" {
         pane split_direction="vertical" {
-            pane name="Home Pitwall" focus=true command="/bin/zsh" {
-                args "-lc" "claude_create_or_resume 'Home Pitwall'"
+            pane name="Home Watch" focus=true command="/bin/zsh" {
+                args "-lc" "claude_create_or_resume 'Home Watch'"
             }
             pane name="Home Main" command="/bin/zsh" {
                 args "-lc" "claude_create_or_resume 'Home Main'"

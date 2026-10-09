@@ -1,7 +1,7 @@
     tab name="{{name}}" cwd="{{cwd}}" {
         pane split_direction="vertical" {
-            pane name="{{name}} Pitwall" focus=true command="/bin/zsh" {
-                args "-lc" "claude_create_or_resume '{{name}} Pitwall'"
+            pane name="{{name}} Watch" focus=true command="/bin/zsh" {
+                args "-lc" "claude_create_or_resume '{{name}} Watch'"
             }
             pane name="{{name}} Main" command="/bin/zsh" {
                 args "-lc" "claude_create_or_resume '{{name}} Main'"

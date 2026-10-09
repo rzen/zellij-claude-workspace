@@ -8,7 +8,9 @@
 # most recent user/assistant activity (file mtime is useless — merely
 # resuming a stale transcript touches it). --name on the resume re-asserts the
 # title. A miss creates under a stable uuid5(cwd+name) with --name, so nothing
-# ever drops into the picker.
+# ever drops into the picker. A role that was renamed (see RENAMED) also
+# matches transcripts still titled with its old name, so `ztab --heal`
+# renaming a pane does not orphan its conversation.
 # NOTE: this reads Claude Code's on-disk transcripts (~/.claude/projects/<slug>/
 # *.jsonl, `custom-title` records) — an undocumented internal format that may
 # change between Claude Code releases. If the lookup stops finding sessions,
@@ -30,6 +32,12 @@ import glob, json, os, re, sys, uuid
 cwd, name = sys.argv[1], sys.argv[2]
 slug = re.sub(r"[^A-Za-z0-9]", "-", cwd)
 titles = {name}
+# Renamed roles: a session still titled with the old role is found under the
+# new one, and the --name on resume re-titles it. New suffix -> old suffixes.
+RENAMED = {" Watch": (" Pitwall",)}
+for new, olds in RENAMED.items():
+    if name.endswith(new):
+        titles |= {name[:-len(new)] + old for old in olds}
 best, best_ts = None, ""
 for f in glob.glob(os.path.expanduser(f"~/.claude/projects/{slug}/*.jsonl")):
     titled, last = False, ""
